@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mein Globus</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;800&display=swap" rel="stylesheet">
+<link href="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.css" rel="stylesheet">
+<script src="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+:root{--wald:#1f3a2e;--moos:#4f7a55;--salbei:#a9c3a0;--nebel:#eef3ea;--tinte:#14231b;--weiss:#fbfdf9}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;font-family:Manrope,system-ui,sans-serif;color:var(--tinte);background:var(--wald)}
+#map{position:absolute;inset:0}
+.bar{position:absolute;top:14px;left:14px;right:14px;display:flex;gap:10px;align-items:center;pointer-events:none;z-index:5}
+.bar>*{pointer-events:auto}
+.brand{font-weight:800;font-size:1.15rem;color:var(--weiss);text-shadow:0 1px 8px rgba(0,0,0,.5);margin-right:auto}
+button,input,textarea{font:inherit}
+.btn{border:0;border-radius:999px;padding:9px 16px;background:var(--weiss);color:var(--wald);font-weight:600;cursor:pointer}
+.btn:hover{background:var(--salbei)}
+.btn.primary{background:var(--moos);color:#fff}.btn.primary:hover{background:var(--wald)}
+.btn.danger{background:transparent;color:#8a3a2a;padding-left:0}
+.btn:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid var(--salbei);outline-offset:2px}
+#search{width:min(260px,40vw);border:0;border-radius:999px;padding:9px 16px;background:var(--weiss)}
+.panel{position:absolute;top:64px;right:14px;bottom:14px;width:min(360px,calc(100% - 28px));background:var(--nebel);border-radius:18px;padding:20px;overflow:auto;z-index:6;display:none;box-shadow:0 10px 40px rgba(0,0,0,.35)}
+.panel.open{display:block}
+.panel h2{margin:0 0 12px;font-size:1.2rem;color:var(--wald)}
+label{display:block;font-size:.85rem;font-weight:600;margin:12px 0 4px;color:var(--wald)}
+input,textarea{width:100%;border:1px solid var(--salbei);border-radius:10px;padding:9px 11px;background:var(--weiss)}
+textarea{min-height:90px;resize:vertical}
+.row{display:flex;gap:8px;margin-top:16px;align-items:center}
+.muted{color:var(--moos);font-size:.85rem}
+.photos{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+.photos img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px}
+.pin{width:16px;height:16px;border-radius:50%;background:var(--moos);border:3px solid var(--weiss);box-shadow:0 0 0 2px rgba(31,58,46,.5);cursor:pointer}
+.pin.neu{background:#e8f5c8}
+#modal{position:fixed;inset:0;background:rgba(20,35,27,.6);display:none;align-items:center;justify-content:center;z-index:10;padding:16px}
+#modal.open{display:flex}
+#modal .box{background:var(--nebel);border-radius:18px;padding:24px;width:min(360px,100%)}
+#toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--wald);color:#fff;padding:10px 18px;border-radius:999px;display:none;z-index:20;max-width:90%}
+@media(prefers-reduced-motion:no-preference){.panel.open{animation:ein .2s ease-out}@keyframes ein{from{opacity:0;transform:translateX(12px)}}}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="bar">
+  <span class="brand">Mein Globus</span>
+  <input id="search" type="search" placeholder="Ort suchen" aria-label="Ort suchen">
+  <button class="btn" id="layerBtn">Karte</button>
+  <button class="btn" id="authBtn">Anmelden</button>
+</div>
+<div class="panel" id="panel"></div>
+<div id="modal"><div class="box">
+  <h2 style="margin-top:0;color:var(--wald)">Konto</h2>
+  <label for="email">E-Mail</label><input id="email" type="email" autocomplete="email">
+  <label for="pw">Passwort (mind. 6 Zeichen)</label><input id="pw" type="password" autocomplete="current-password">
+  <div class="row"><button class="btn primary" id="loginBtn">Anmelden</button><button class="btn" id="signupBtn">Registrieren</button><button class="btn" id="closeModal">Abbrechen</button></div>
+</div></div>
+<div id="toast"></div>
+
+<script>
+// ====== HIER EINTRAGEN (Supabase → Project Settings → API) ======
+const SUPABASE_URL = 'https://edkopjcidtrppdnmthbs.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVka29wamNpZHRycHBkbm10aGJzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA3MDYzNzAsImV4cCI6MjEwNjI4MjM3MH0.XZzV9S-KjJuHisRMX8Dq_66nGnQSuOW7wJGjb7oNS9E';
+// =================================================================
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const $ = id => document.getElementById(id);
+const esc = s => (s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let user = null, markers = [], draft = null, sat = true;
+
+function toast(t){const e=$('toast');e.textContent=t;e.style.display='block';clearTimeout(toast.t);toast.t=setTimeout(()=>e.style.display='none',3500)}
+
+// ---------- Karte / Globus ----------
+const map = new maplibregl.Map({
+  container:'map', center:[10,30], zoom:1.6, attributionControl:{compact:true},
+  style:{version:8,
+    sources:{
+      sat:{type:'raster',tileSize:256,maxzoom:18,attribution:'Esri World Imagery',tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}']},
+      osm:{type:'raster',tileSize:256,maxzoom:19,attribution:'© OpenStreetMap',tiles:['https://tile.openstreetmap.org/{z}/{x}/{y}.png']}},
+    layers:[
+      {id:'sat',type:'raster',source:'sat'},
+      {id:'osm',type:'raster',source:'osm',layout:{visibility:'none'}}]}
+});
+map.on('style.load',()=>map.setProjection({type:'globe'}));
+map.addControl(new maplibregl.NavigationControl({visualizePitch:true}),'bottom-left');
+$('layerBtn').onclick=()=>{sat=!sat;map.setLayoutProperty('sat','visibility',sat?'visible':'none');map.setLayoutProperty('osm','visibility',sat?'none':'visible');$('layerBtn').textContent=sat?'Karte':'Satellit'};
+
+map.on('click',e=>{
+  if(!user){toast('Bitte zuerst anmelden, um Orte zu markieren.');return}
+  startDraft(e.lngLat.lat,e.lngLat.lng);
+});
+
+$('search').addEventListener('keydown',async e=>{
+  if(e.key!=='Enter')return;
+  const q=e.target.value.trim(); if(!q)return;
+  try{
+    const r=await (await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q='+encodeURIComponent(q))).json();
+    if(!r.length)return toast('Ort nicht gefunden.');
+    map.flyTo({center:[+r[0].lon,+r[0].lat],zoom:9,duration:2500});
+  }catch{toast('Suche fehlgeschlagen.')}
+});
+
+// ---------- Konto ----------
+const openModal=v=>$('modal').classList.toggle('open',v);
+$('authBtn').onclick=async()=>{ if(user){await sb.auth.signOut()} else openModal(true) };
+$('closeModal').onclick=()=>openModal(false);
+$('loginBtn').onclick=async()=>{
+  const {error}=await sb.auth.signInWithPassword({email:$('email').value.trim(),password:$('pw').value});
+  if(error)return toast('Anmeldung fehlgeschlagen: '+error.message); openModal(false);
+};
+$('signupBtn').onclick=async()=>{
+  const {data,error}=await sb.auth.signUp({email:$('email').value.trim(),password:$('pw').value,options:{emailRedirectTo:location.href.split('#')[0]}});
+  if(error)return toast('Registrierung fehlgeschlagen: '+error.message);
+  openModal(false);
+  toast(data.session?'Konto erstellt.':'Bitte bestätige deine E-Mail (Postfach prüfen), dann anmelden.');
+};
+sb.auth.onAuthStateChange((_ev,session)=>{
+  user=session?.user??null;
+  $('authBtn').textContent=user?'Abmelden':'Anmelden';
+  closePanel(); loadVisits();
+});
+
+// ---------- Daten ----------
+function clearMarkers(){markers.forEach(m=>m.remove());markers=[]}
+async function loadVisits(){
+  clearMarkers(); if(!user)return;
+  const {data,error}=await sb.from('visits').select('*').order('visited_on',{ascending:false});
+  if(error)return toast('Laden fehlgeschlagen: '+error.message);
+  data.forEach(v=>{
+    const el=document.createElement('div');el.className='pin';el.title=v.title;
+    el.onclick=ev=>{ev.stopPropagation();showVisit(v)};
+    markers.push(new maplibregl.Marker({element:el}).setLngLat([v.lng,v.lat]).addTo(map));
+  });
+}
+
+// ---------- Panel ----------
+function closePanel(){$('panel').classList.remove('open');if(draft){draft.remove();draft=null}}
+function openPanel(html){$('panel').innerHTML=html;$('panel').classList.add('open')}
+
+function startDraft(lat,lng){
+  if(draft)draft.remove();
+  const el=document.createElement('div');el.className='pin neu';
+  draft=new maplibregl.Marker({element:el}).setLngLat([lng,lat]).addTo(map);
+  openPanel(`<h2>Neuer Ort</h2>
+  <p class="muted">Koordinaten: ${lat.toFixed(4)}, ${lng.toFixed(4)}</p>
+  <label for="f_title">Titel</label><input id="f_title" placeholder="z. B. Sommerurlaub">
+  <label for="f_place">Genauer Ort</label><input id="f_place" placeholder="z. B. Strand von Ipanema, Rio">
+  <label for="f_date">Datum</label><input id="f_date" type="date" value="${new Date().toISOString().slice(0,10)}">
+  <label for="f_note">Notiz</label><textarea id="f_note"></textarea>
+  <label for="f_photos">Fotos</label><input id="f_photos" type="file" accept="image/*" multiple>
+  <div class="row"><button class="btn primary" id="save">Speichern</button><button class="btn" id="cancel">Abbrechen</button></div>`);
+  $('cancel').onclick=closePanel;
+  $('save').onclick=()=>saveVisit(lat,lng);
+}
+
+async function saveVisit(lat,lng){
+  const title=$('f_title').value.trim(); if(!title)return toast('Bitte einen Titel eingeben.');
+  const files=[...$('f_photos').files];
+  $('save').disabled=true;$('save').textContent='Speichere …';
+  const {data,error}=await sb.from('visits').insert({title,place:$('f_place').value.trim(),lat,lng,visited_on:$('f_date').value||null,note:$('f_note').value.trim()}).select().single();
+  if(error){$('save').disabled=false;$('save').textContent='Speichern';return toast('Fehler: '+error.message)}
+  const paths=[];
+  for(const f of files){
+    const ext=(f.name.split('.').pop()||'jpg').toLowerCase().replace(/[^a-z0-9]/g,'');
+    const p=`${user.id}/${data.id}/${Date.now()}_${paths.length}.${ext}`;
+    const {error:ue}=await sb.storage.from('photos').upload(p,f,{contentType:f.type});
+    if(ue)toast('Foto nicht hochgeladen: '+ue.message); else paths.push(p);
+  }
+  if(paths.length)await sb.from('visits').update({photos:paths}).eq('id',data.id);
+  closePanel(); await loadVisits(); toast('Gespeichert.');
+}
+
+async function showVisit(v){
+  if(draft){draft.remove();draft=null}
+  map.flyTo({center:[v.lng,v.lat],zoom:Math.max(map.getZoom(),6),duration:1500});
+  const d=v.visited_on?new Date(v.visited_on).toLocaleDateString('de-DE',{day:'numeric',month:'long',year:'numeric'}):'';
+  openPanel(`<h2>${esc(v.title)}</h2>
+  <p class="muted">${esc(v.place||'')}${v.place&&d?' · ':''}${d}</p>
+  <p style="white-space:pre-wrap">${esc(v.note||'')}</p>
+  <div class="photos" id="ph"></div>
+  <div class="row"><button class="btn" id="close">Schließen</button><button class="btn danger" id="del">Löschen</button></div>`);
+  $('close').onclick=closePanel;
+  $('del').onclick=async()=>{
+    if(!confirm('Diesen Ort wirklich löschen?'))return;
+    if(v.photos?.length)await sb.storage.from('photos').remove(v.photos);
+    const {error}=await sb.from('visits').delete().eq('id',v.id);
+    if(error)return toast('Fehler: '+error.message);
+    closePanel();loadVisits();
+  };
+  if(v.photos?.length){
+    const {data}=await sb.storage.from('photos').createSignedUrls(v.photos,3600);
+    (data||[]).forEach(o=>{if(!o.signedUrl)return;const i=document.createElement('img');i.src=o.signedUrl;i.alt='Foto';i.loading='lazy';i.onclick=()=>window.open(o.signedUrl,'_blank');$('ph')?.appendChild(i)});
+  }
+}
+</script>
+</body>
+</html>
